@@ -1,0 +1,224 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs: &inputs
+      unpackers:
+        required: false
+        type: string
+        default: "unrar 7zip"
+      unrar-version:
+        required: false
+        type: string
+        default: "7.23"
+      unrar-src-version:
+        required: false
+        type: string
+        default: "7.2.7"
+      zip7-version:
+        required: false
+        type: string
+        default: "26.02"
+      platforms:
+        required: false
+        type: string
+        default: "linux android freebsd windows macos"
+      linux-archs:
+        required: false
+        type: string
+        default: "armel armhf aarch64 i686 x86_64 riscv64 ppc6xx"
+      android-archs:
+        required: false
+        type: string
+        default: "i686-ndk x86_64-ndk armhf-ndk aarch64-ndk"
+      release-tag:
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs: *inputs
+
+env:
+  UNPACKERS: ${{ inputs.unpackers }}
+  PLATFORMS: ${{ inputs.platforms }}
+  LINUX_ARCHS: ${{ inputs.linux-archs }}
+  ANDROID_ARCHS: ${{ inputs.android-archs }}
+  UNRAR_VERSION: ${{ inputs.unrar-version }}
+  UNRAR_SRC_VERSION: ${{ inputs.unrar-src-version }}
+  ZIP7_VERSION: ${{ inputs.zip7-version }}
+
+jobs:
+
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+
+    steps:
+
+      - name: Generate matrix
+        id: generate
+        run: |
+          matrix="[]"
+          for platform in $PLATFORMS; do
+            case $platform in
+              linux)
+                for arch in $LINUX_ARCHS; do
+                  matrix=$(jq -c --arg platform "$platform" --arg arch "$arch" '. + [{"platform": $platform, "arch": $arch}]' <<< "$matrix")
+                done
+                ;;
+              android)
+                for arch in $ANDROID_ARCHS; do
+                  matrix=$(jq -c --arg platform "$platform" --arg arch "$arch" '. + [{"platform": $platform, "arch": $arch}]' <<< "$matrix")
+                done
+                ;;
+              *)
+                matrix=$(jq -c --arg platform "$platform" '. + [{"platform": $platform, "arch": ""}]' <<< "$matrix")
+                ;;
+            esac
+          done
+          echo "Generated matrix: $matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.matrix) }}
+
+    env:
+      PLATFORMS: ${{ matrix.platform }}
+      LINUX_ARCHS: ${{ matrix.platform == 'linux' && matrix.arch || '' }}
+      ANDROID_ARCHS: ${{ matrix.platform == 'android' && matrix.arch || '' }}
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+
+      - name: Prepare environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            tar \
+            sed \
+            zip \
+            unrar \
+            p7zip-full \
+            xz-utils \
+            clang-18 \
+            lld-18 \
+            llvm-18
+          sudo mkdir -p /build
+          sudo chown $USER:$USER /build
+          if [ "${{ matrix.platform }}" == "android" ]; then
+            mkdir -p /build/android
+            curl -L https://github.com/nzbgetcom/build-files/releases/download/v8.0/android-${{ matrix.arch }}.tar.gz -o /build/android/ndk.tar.gz
+            tar zxf /build/android/ndk.tar.gz -C /build/android
+          fi
+          if [ "${{ matrix.platform }}" == "linux" ]; then
+            mkdir -p /build/buildroot
+            curl -L https://github.com/nzbgetcom/build-files/releases/download/v8.0/buildroot-${{ matrix.arch }}.tar.gz -o /build/buildroot/buildroot.tar.gz
+            tar zxf /build/buildroot/buildroot.tar.gz -C /build/buildroot
+          fi
+          if [ "${{ matrix.platform }}" == "freebsd" ]; then
+            mkdir -p /build/freebsd
+            curl -L https://github.com/nzbgetcom/build-files/releases/download/v8.0/freebsd-sysroot.tar.gz -o /build/freebsd/sysroot.tar.gz
+            tar zxf /build/freebsd/sysroot.tar.gz -C /build/freebsd
+          fi
+
+      - name: Build / download binaries
+        run: |
+          ./build.sh
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ matrix.platform }}${{ matrix.arch != '' && format('-{0}', matrix.arch) || '' }}
+          path: build/build.log
+          if-no-files-found: ignore
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: unpackers-${{ matrix.platform }}${{ matrix.arch != '' && format('-{0}', matrix.arch) || '' }}
+          path: build
+
+  collect:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+
+    steps:
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v7
+        with:
+          pattern: unpackers-*
+          path: unpackers
+          merge-multiple: true
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unpackers
+          path: unpackers
+          if-no-files-found: ignore
+
+      - name: Delete per-platform artifacts
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+            for (const artifact of data.artifacts) {
+              if (artifact.name.startsWith('unpackers-')) {
+                console.log(`Deleting artifact ${artifact.name} (${artifact.id})`);
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: artifact.id,
+                });
+              }
+            }
+
+  release:
+    needs: collect
+    if: ${{ inputs.release-tag != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Download combined artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: unpackers
+          path: unpackers
+
+      - name: Create / update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets"
+            gh release upload "$TAG" unpackers/* --repo "$REPO" --clobber
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" unpackers/* --repo "$REPO" --title "$TAG" --notes "$TAG"
+          fi
