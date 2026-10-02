@@ -258,7 +258,7 @@ download_7zip_macos()
     mkdir -p $OUT_DIR
     tar xf 7z.tar.xz -C $OUT_DIR
     cp $OUT_DIR/7zz $BUILD_DIR/7za
-    tar zcf 7zip-$ZIP7_VERSION-macos-universal.tar.gz 7za > $BUILD_DIR/build.log 2>&1
+    tar zcf 7zip-macos-universal.tar.gz 7za > $BUILD_DIR/build.log 2>&1
     rm -rf $OUT_DIR
     rm $BUILD_DIR/*.tar.xz
     rm $BUILD_DIR/build.log
@@ -281,9 +281,9 @@ download_unrar_macos()
     cp $ARM64_DIR/rar/unrar $ARM64_DIR/unrar
     cp $X64_DIR/rar/unrar $X64_DIR/unrar
     llvm-lipo-18 -create -output $BUILD_DIR/unrar $ARM64_DIR/unrar $X64_DIR/unrar
-    tar -C $ARM64_DIR -zcf unrar-$UNRAR_VERSION-macos-arm64.tar.gz unrar
-    tar -C $X64_DIR -zcf unrar-$UNRAR_VERSION-macos-x64.tar.gz unrar
-    tar -C $BUILD_DIR -zcf unrar-$UNRAR_VERSION-macos-universal.tar.gz unrar
+    tar -C $ARM64_DIR -zcf unrar-macos-arm64.tar.gz unrar
+    tar -C $X64_DIR -zcf unrar-macos-x64.tar.gz unrar
+    tar -C $BUILD_DIR -zcf unrar-macos-universal.tar.gz unrar
     rm -rf $ARM64_DIR $X64_DIR $BUILD_DIR/unrar
     rm $BUILD_DIR/unrar-arm64.tar.gz $BUILD_DIR/unrar-x64.tar.gz
     echo "done"
