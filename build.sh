@@ -221,7 +221,7 @@ download_unrar_windows()
     mkdir -p $OUT_DIR
     unrar x winrar-x64.exe $OUT_DIR > $BUILD_DIR/build.log 2>&1
     mv $OUT_DIR/UnRAR.exe $BUILD_DIR/unrar.exe
-    zip unrar-windows-x64.zip $BUILD_DIR/unrar.exe >> $BUILD_DIR/build.log 2>&1
+    zip -j unrar-windows-x64.zip $BUILD_DIR/unrar.exe >> $BUILD_DIR/build.log 2>&1
     rm -rf $OUT_DIR
     rm $BUILD_DIR/*.exe
     rm $BUILD_DIR/build.log
@@ -241,8 +241,8 @@ download_7zip_windows()
     mkdir -p $X64_DIR
     mv $OUT_DIR/7za.exe $X86_DIR/7za.exe
     mv $OUT_DIR/x64/7za.exe $X64_DIR/7za.exe
-    zip 7zip-windows-x86.zip $X86_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
-    zip 7zip-windows-x64.zip $X64_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
+    zip -j 7zip-windows-x86.zip $X86_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
+    zip -j 7zip-windows-x64.zip $X64_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
     rm -rf $OUT_DIR $X86_DIR $X64_DIR
     rm $BUILD_DIR/*.7z
     rm $BUILD_DIR/build.log
