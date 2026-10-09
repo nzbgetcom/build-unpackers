@@ -142,6 +142,8 @@ build_unrar()
     if [ "$PLATFORM" == "android" ] ; then
         sed 's:#ifdef __VMS$:#if defined (__VMS) || defined (__ANDROID__):' -i consio.cpp
         sed 's:^#define USE_LUTIMES$:#undef USE_LUTIMES:' -i os.hpp
+        # PIE + static libc++, dynamic Bionic (same model as nzbget). -static makes ARM64 TLS align 8.
+        sed "s|^LDFLAGS=.*|LDFLAGS=-pie -static-libstdc++|" -i makefile
     fi
     # freebsd specific fixes
     if [ "$PLATFORM" == "freebsd" ]; then
@@ -165,6 +167,9 @@ build_unrar()
             sed "s|CXXFLAGS=-march=native |CXXFLAGS=|" -i makefile
             ;;
     esac
+    if [ "$PLATFORM" == "android" ]; then
+        sed "s|^CXXFLAGS=|CXXFLAGS=-fPIE |" -i makefile
+    fi
 
     # build
     make clean
@@ -193,7 +198,8 @@ build_7zip()
     if [ "$PLATFORM" == "android" ]; then
         sed "s|^#if defined(TIME_UTC)|#if defined(_TIME_UTC)|g" -i ../Windows/TimeUtils.cpp
         sed "s|^LIB2 =.*|LIB2 = |g" -i 7zip_gcc.mak
-        sed "s|^CFLAGS_WARN_WALL =.*|CFLAGS_WARN_WALL = -Wall -Wextra|" -i 7zip_gcc.mak
+        sed "s|^CFLAGS_WARN_WALL =.*|CFLAGS_WARN_WALL = -Wall -Wextra -fPIE|" -i 7zip_gcc.mak
+        sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -pie -static-libstdc++|" -i 7zip_gcc.mak
     fi
     if [ "$PLATFORM" == "freebsd" ]; then
         sed "s|^MY_ARCH_2 = .*|MY_ARCH_2 = \$(MY_ARCH) --target=x86_64-pc-freebsd --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i 7zip_gcc.mak
