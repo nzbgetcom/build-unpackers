@@ -23,15 +23,15 @@ set -e
 # variables and defaults
 UNRAR_VERSION="${UNRAR_VERSION:-7.23}"
 UNRAR_SRC_VERSION="${UNRAR_SRC_VERSION:-7.2.7}"
-ZIP7_VERSION="${ZIP7_VERSION:-26.02}"
+ZIP7_VERSION="${ZIP7_VERSION:-26.03}"
 
 # build architectures
 LINUX_ARCHS="${LINUX_ARCHS:-armel armhf aarch64 i686 x86_64 riscv64 ppc6xx}"
 ANDROID_ARCHS="${ANDROID_ARCHS:-i686-ndk x86_64-ndk armhf-ndk aarch64-ndk}"
-FREEBSD_ARCHS="${FREEBSD_ARCHS:-x86_64-bsd}"
+FREEBSD_ARCHS="${FREEBSD_ARCHS:-x86_64-bsd aarch64-bsd}"
 
 # freebsd variables
-FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-/build/freebsd/sysroot}"
+FREEBSD_SYSROOT_BASE="${FREEBSD_SYSROOT_BASE:-/build/freebsd}"
 FREEBSD_CLANG_VER="${FREEBSD_CLANG_VER:-18}"
 
 # platforms
@@ -84,6 +84,13 @@ setup_toolchain()
             ;;
         x86_64-bsd)
             export HOST="x86_64-bsd"
+            export FREEBSD_TARGET="x86_64-pc-freebsd"
+            export FREEBSD_SYSROOT="${FREEBSD_SYSROOT_X86_64:-$FREEBSD_SYSROOT_BASE/sysroot-x86_64}"
+            ;;
+        aarch64-bsd)
+            export HOST="aarch64-bsd"
+            export FREEBSD_TARGET="aarch64-unknown-freebsd"
+            export FREEBSD_SYSROOT="${FREEBSD_SYSROOT_AARCH64:-$FREEBSD_SYSROOT_BASE/sysroot-aarch64}"
             ;;
     esac
 
@@ -147,9 +154,9 @@ build_unrar()
     fi
     # freebsd specific fixes
     if [ "$PLATFORM" == "freebsd" ]; then
-        sed "s|^CXXFLAGS=.*|CXXFLAGS=-std=c++11 -O2 -nostdlib --target=x86_64-pc-freebsd --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i makefile
-        sed "s|^LDFLAGS=.*|LDFLAGS=-static --target=x86_64-pc-freebsd --sysroot=$FREEBSD_SYSROOT -pthread -lc++ -lm -fuse-ld=lld|" -i makefile
-        sed "s|^STRIP=.*|STRIP=strip|" -i makefile
+        sed "s|^CXXFLAGS=.*|CXXFLAGS=-std=c++11 -O2 -nostdlib --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i makefile
+        sed "s|^LDFLAGS=.*|LDFLAGS=-static --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -pthread -lc++ -lm -fuse-ld=lld|" -i makefile
+        sed "s|^STRIP=.*|STRIP=llvm-strip-$FREEBSD_CLANG_VER|" -i makefile
     fi
     # unrar7 optimizations
     sed "s|LDFLAGS=-pthread|LDFLAGS=-pthread -static|" -i makefile
@@ -202,7 +209,8 @@ build_7zip()
         sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -pie -static-libstdc++|" -i 7zip_gcc.mak
     fi
     if [ "$PLATFORM" == "freebsd" ]; then
-        sed "s|^MY_ARCH_2 = .*|MY_ARCH_2 = \$(MY_ARCH) --target=x86_64-pc-freebsd --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i 7zip_gcc.mak
+        sed "s|^MY_ARCH_2 = .*|MY_ARCH_2 = \$(MY_ARCH) --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i 7zip_gcc.mak
+        sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -static -fuse-ld=lld|" -i 7zip_gcc.mak
     fi
     cd Bundles/Alone
     make -j $COREX -f makefile.gcc > $BUILD_DIR/build.log 2>&1

@@ -31,6 +31,10 @@ on:
         required: false
         type: string
         default: "i686-ndk x86_64-ndk armhf-ndk aarch64-ndk"
+      freebsd-archs:
+        required: false
+        type: string
+        default: "x86_64-bsd aarch64-bsd"
       release-tag:
         required: false
         type: string
@@ -43,6 +47,7 @@ env:
   PLATFORMS: ${{ inputs.platforms }}
   LINUX_ARCHS: ${{ inputs.linux-archs }}
   ANDROID_ARCHS: ${{ inputs.android-archs }}
+  FREEBSD_ARCHS: ${{ inputs.freebsd-archs }}
   UNRAR_VERSION: ${{ inputs.unrar-version }}
   UNRAR_SRC_VERSION: ${{ inputs.unrar-src-version }}
   ZIP7_VERSION: ${{ inputs.zip7-version }}
@@ -72,6 +77,11 @@ jobs:
                   matrix=$(jq -c --arg platform "$platform" --arg arch "$arch" '. + [{"platform": $platform, "arch": $arch}]' <<< "$matrix")
                 done
                 ;;
+              freebsd)
+                for arch in $FREEBSD_ARCHS; do
+                  matrix=$(jq -c --arg platform "$platform" --arg arch "$arch" '. + [{"platform": $platform, "arch": $arch}]' <<< "$matrix")
+                done
+                ;;
               *)
                 matrix=$(jq -c --arg platform "$platform" '. + [{"platform": $platform, "arch": ""}]' <<< "$matrix")
                 ;;
@@ -92,6 +102,7 @@ jobs:
       PLATFORMS: ${{ matrix.platform }}
       LINUX_ARCHS: ${{ matrix.platform == 'linux' && matrix.arch || '' }}
       ANDROID_ARCHS: ${{ matrix.platform == 'android' && matrix.arch || '' }}
+      FREEBSD_ARCHS: ${{ matrix.platform == 'freebsd' && matrix.arch || '' }}
 
     steps:
 
@@ -130,7 +141,9 @@ jobs:
           fi
           if [ "${{ matrix.platform }}" == "freebsd" ]; then
             mkdir -p /build/freebsd
-            curl -L https://github.com/nzbgetcom/build-files/releases/download/v8.0/freebsd-sysroot.tar.gz -o /build/freebsd/sysroot.tar.gz
+            arch="${{ matrix.arch }}"
+            sysroot_arch="${arch%-bsd}"
+            curl -L "https://github.com/nzbgetcom/build-files/releases/download/v8.0/freebsd-sysroot-${sysroot_arch}.tar.gz" -o /build/freebsd/sysroot.tar.gz
             tar zxf /build/freebsd/sysroot.tar.gz -C /build/freebsd
           fi
 

@@ -12,7 +12,7 @@ The script either **cross-compiles from source** (Linux, Android, FreeBSD) or **
 - Cross-compilation toolchains available under `/build` (configurable via `BUILDROOT_HOME`):
   - `/build/buildroot/<arch>` - buildroot musl toolchains for Linux targets
   - `/build/android/<arch>` - Android NDK toolchains
-  - `/build/freebsd/sysroot` - FreeBSD sysroot, plus `clang`/`clang++`/`lld` version `FREEBSD_CLANG_VER` on `PATH`
+  - `/build/freebsd/sysroot-x86_64` and `/build/freebsd/sysroot-aarch64` - FreeBSD sysroots, plus `clang`/`clang++`/`lld` version `FREEBSD_CLANG_VER` on `PATH`
 
 ### Installing prerequisites on Ubuntu 24.04
 
@@ -58,7 +58,7 @@ Output archives are written to `./build/` (the directory is wiped and recreated 
 | `UNPACKERS` | `unrar 7zip` | Space-separated list of unpackers to build/download. Valid values: `unrar`, `7zip`. |
 | `LINUX_ARCHS` | `armel armhf aarch64 i686 x86_64 riscv64 ppc6xx` | Architectures to build for the `linux` platform. |
 | `ANDROID_ARCHS` | `i686-ndk x86_64-ndk armhf-ndk aarch64-ndk` | Architectures to build for the `android` platform. |
-| `FREEBSD_ARCHS` | `x86_64-bsd` | Architectures to build for the `freebsd` platform. |
+| `FREEBSD_ARCHS` | `x86_64-bsd aarch64-bsd` | Architectures to build for the `freebsd` platform. |
 | `BUILDROOT_HOME` | `/build` | Root path containing the `buildroot` and `android` cross-toolchains. |
 
 ## Reusable GitHub Actions workflow
@@ -78,6 +78,7 @@ It also runs standalone (`workflow_dispatch`) with the same inputs, so it can be
 | `platforms` | `"linux android freebsd windows macos"` | Space-separated list of platforms to process. |
 | `linux-archs` | `"armel armhf aarch64 i686 x86_64 riscv64 ppc6xx"` | Architectures to build for the `linux` platform. |
 | `android-archs` | `"i686-ndk x86_64-ndk armhf-ndk aarch64-ndk"` | Architectures to build for the `android` platform. |
+| `freebsd-archs` | `"x86_64-bsd aarch64-bsd"` | Architectures to build for the `freebsd` platform. |
 | `release-tag` | `""` | If set, publishes a GitHub release with this tag containing all built/downloaded archives. Left empty (default), no release is created. |
 
 ### Example: calling it from another repository
