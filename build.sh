@@ -30,9 +30,10 @@ LINUX_ARCHS="${LINUX_ARCHS:-armel armhf aarch64 i686 x86_64 riscv64 ppc6xx}"
 ANDROID_ARCHS="${ANDROID_ARCHS:-i686-ndk x86_64-ndk armhf-ndk aarch64-ndk}"
 FREEBSD_ARCHS="${FREEBSD_ARCHS:-x86_64-bsd aarch64-bsd}"
 
-# freebsd variables
-FREEBSD_SYSROOT_BASE="${FREEBSD_SYSROOT_BASE:-/build/freebsd}"
-FREEBSD_CLANG_VER="${FREEBSD_CLANG_VER:-18}"
+# toolchain locations inside ghcr.io/nzbgetcom/nzbget-musl-builder
+NZBGET_LINUX_TOOLCHAIN_DIR="${NZBGET_LINUX_TOOLCHAIN_DIR:-/opt/nzbget/linux}"
+NZBGET_ANDROID_TOOLCHAIN_DIR="${NZBGET_ANDROID_TOOLCHAIN_DIR:-/opt/nzbget/android}"
+FREEBSD_PREFIX="${FREEBSD_PREFIX:-/opt/nzbget/freebsd}"
 
 # platforms
 PLATFORMS="${PLATFORMS:-linux android freebsd windows macos}"
@@ -41,265 +42,327 @@ PLATFORMS="${PLATFORMS:-linux android freebsd windows macos}"
 UNPACKERS="${UNPACKERS:-unrar 7zip}"
 
 # build variables
-BUILDROOT_HOME="${BUILDROOT_HOME:-/build}"
 BUILD_DIR=$PWD/build
 CORES=$(nproc || echo 1)
 
-setup_toolchain()
+linux_triple()
 {
-    export ARCH=$ARCH
+    case $1 in
+        armel) echo "arm-linux-musleabi" ;;
+        armhf) echo "arm-linux-musleabihf" ;;
+        aarch64) echo "aarch64-linux-musl" ;;
+        i686) echo "i686-linux-musl" ;;
+        x86_64) echo "x86_64-linux-musl" ;;
+        riscv64) echo "riscv64-linux-musl" ;;
+        ppc6xx) echo "powerpc-linux-musl" ;;
+        *)
+            echo "Unknown linux arch: $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+require_compiler()
+{
+    if [ -x "$1" ] || command -v "$1" >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "Compiler not found: $1" >&2
+    echo "Use a ghcr.io/nzbgetcom/nzbget-musl-builder image that contains the $PLATFORM toolchain." >&2
+    exit 1
+}
+
+setup_android()
+{
+    local root="$NZBGET_ANDROID_TOOLCHAIN_DIR"
+    local api_file="$root/libcxx/api-level"
+    local api=21
+    local triple flags libcxx_arch common libdir
+
+    if [ ! -f "$api_file" ]; then
+        api_file="$root/api-level"
+    fi
+    if [ -f "$api_file" ]; then
+        api=$(tr -d '[:space:]' < "$api_file")
+    fi
+
     case $ARCH in
-        armel)
-            export HOST="arm-buildroot-linux-musleabi"
-            ;;
-        armhf)
-            export HOST="arm-buildroot-linux-musleabihf"
-            ;;
-        aarch64)
-            export HOST="aarch64-buildroot-linux-musl"
-            ;;
-        i686)
-            export HOST="i686-buildroot-linux-musl"
-            ;;
-        x86_64)
-            export HOST="x86_64-buildroot-linux-musl"
-            ;;
-        riscv64)
-            export HOST="riscv64-buildroot-linux-musl"
-            ;;
-        ppc6xx)
-            export HOST="powerpc-buildroot-linux-musl"
-            ;;
-        i686-ndk)
-            export HOST="i686-linux-android"
-            ;;
-        x86_64-ndk)
-            export HOST="x86_64-linux-android"
+        aarch64-ndk)
+            triple="aarch64-linux-android${api}"
+            flags=""
+            libcxx_arch="arm64"
             ;;
         armhf-ndk)
-            export HOST="arm-linux-androideabi"
+            triple="armv7a-linux-androideabi${api}"
+            flags="-march=armv7-a -mfloat-abi=softfp -mfpu=vfpv3-d16 -mthumb"
+            libcxx_arch="armv7"
             ;;
-        aarch64-ndk)
-            export HOST="aarch64-linux-android"
+        x86_64-ndk)
+            triple="x86_64-linux-android${api}"
+            flags=""
+            libcxx_arch="x86_64"
             ;;
-        x86_64-bsd)
-            export HOST="x86_64-bsd"
-            export FREEBSD_TARGET="x86_64-pc-freebsd"
-            export FREEBSD_SYSROOT="${FREEBSD_SYSROOT_X86_64:-$FREEBSD_SYSROOT_BASE/sysroot-x86_64}"
-            ;;
-        aarch64-bsd)
-            export HOST="aarch64-bsd"
-            export FREEBSD_TARGET="aarch64-unknown-freebsd"
-            export FREEBSD_SYSROOT="${FREEBSD_SYSROOT_AARCH64:-$FREEBSD_SYSROOT_BASE/sysroot-aarch64}"
-            ;;
-    esac
-
-
-    case $PLATFORM in
-        android)
-            TOOLCHAIN_PATH=$BUILDROOT_HOME/android
-            unset CPP
-            export CC="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-clang"
-            export CXX="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-clang++"
-            export AR="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-ar"
-            export STRIP="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-strip"
-            ;;
-        freebsd)
-            export CC="clang-$FREEBSD_CLANG_VER"
-            export CPP="clang-cpp-$FREEBSD_CLANG_VER"
-            export CXX="clang++-$FREEBSD_CLANG_VER"
-            unset AR
-            unset STRIP
+        i686-ndk)
+            triple="i686-linux-android${api}"
+            flags="-march=i686"
+            libcxx_arch="x86"
             ;;
         *)
-            TOOLCHAIN_PATH=$BUILDROOT_HOME/buildroot
-            export CC="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-gcc"
-            export CPP="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-cpp"
-            export CXX="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-g++"
-            export AR="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-ar"
-            export STRIP="$TOOLCHAIN_PATH/$ARCH/output/host/usr/bin/$HOST-strip"
+            echo "Unknown android arch: $ARCH" >&2
+            exit 1
             ;;
     esac
 
-    # build flags
-    export CXXFLAGS="-Os"
-    export CPPFLAGS="-Os"
-    export LDFLAGS=""
-
-    if [ "$PLATFORM" == "freebsd" ]; then
-        export CXXFLAGS="-Os --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1"
-        export CFLAGS=$CXXFLAGS
-        export CPPFLAGS=$CXXFLAGS
+    libdir="$root/libcxx/$libcxx_arch/lib"
+    if [ ! -f "$libdir/libc++.a" ]; then
+        echo "Android libc++ not found: $libdir/libc++.a" >&2
+        exit 1
     fi
+    common="--target=${triple} --sysroot=${root}/sysroot"
+    if [ -n "$flags" ]; then
+        common="$common $flags"
+    fi
+
+    export CC="$root/llvm/bin/clang"
+    export CXX="$root/llvm/bin/clang++"
+    export AR="$root/llvm/bin/llvm-ar"
+    export STRIP="$root/llvm/bin/llvm-strip"
+    export UNRAR_CXXFLAGS="$common -D__ANDROID__ -fPIE -nostdinc++ -isystem $root/libcxx/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
+    export UNRAR_LDFLAGS="$common -fuse-ld=lld -rtlib=compiler-rt --unwindlib=none -Wl,--no-dependent-libraries -pie -nostdlib++ -Wl,-z,relro,-z,now -Wl,-z,noexecstack"
+    export UNRAR_LIBS="-Wl,--whole-archive $libdir/libc++.a -Wl,--no-whole-archive $libdir/libc++abi.a $libdir/libunwind.a -ldl -lm -llog"
+    export ZIP_ARCH_FLAGS="$common -D__ANDROID__ -fPIE"
+    export ZIP_CXXFLAGS_EXTRA="-nostdinc++ -isystem $root/libcxx/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
+    export ZIP_LDFLAGS="$UNRAR_LDFLAGS"
+    export ZIP_LIBS="$UNRAR_LIBS"
+}
+
+setup_freebsd()
+{
+    local triple sysroot common sysroot_arch
+
+    if [ -d /usr/lib/llvm-19/bin ]; then
+        export PATH="/usr/lib/llvm-19/bin:$PATH"
+    fi
+
+    case $ARCH in
+        x86_64-bsd)
+            triple="x86_64-pc-freebsd13"
+            sysroot_arch="x86_64"
+            ;;
+        aarch64-bsd)
+            triple="aarch64-pc-freebsd13"
+            sysroot_arch="aarch64"
+            ;;
+        *)
+            echo "Unknown freebsd arch: $ARCH" >&2
+            exit 1
+            ;;
+    esac
+
+    sysroot="$FREEBSD_PREFIX/sysroot-$sysroot_arch"
+    if [ ! -f "$sysroot/usr/include/stdio.h" ]; then
+        echo "FreeBSD sysroot not found: $sysroot" >&2
+        exit 1
+    fi
+    common="--target=${triple} --sysroot=${sysroot}"
+
+    export CC="clang"
+    export CXX="clang++"
+    export AR="llvm-ar"
+    export STRIP="llvm-strip"
+    export UNRAR_CXXFLAGS="$common -isystem $sysroot/usr/include/c++/v1"
+    export UNRAR_LDFLAGS="-pthread -static $common -fuse-ld=lld"
+    export ZIP_ARCH_FLAGS="$common -isystem $sysroot/usr/include/c++/v1"
+    export ZIP_LDFLAGS="-static -fuse-ld=lld"
+}
+
+setup_toolchain()
+{
+    unset UNRAR_CXXFLAGS UNRAR_LIBS ZIP_ARCH_FLAGS ZIP_CXXFLAGS_EXTRA ZIP_LIBS
+    export UNRAR_LDFLAGS=""
+    export ZIP_LDFLAGS=""
+
+    case $PLATFORM in
+        linux)
+            local host bin
+            host=$(linux_triple "$ARCH")
+            bin="$NZBGET_LINUX_TOOLCHAIN_DIR/$ARCH/bin"
+            export CC="$bin/$host-gcc"
+            export CXX="$bin/$host-g++"
+            export AR="$bin/$host-ar"
+            export STRIP="$bin/$host-strip"
+            export UNRAR_LDFLAGS="-pthread -static"
+            export ZIP_LDFLAGS="-static"
+            case $ARCH in
+                x86_64) export UNRAR_CXXFLAGS="-march=x86-64" ;;
+                aarch64) export UNRAR_CXXFLAGS="-march=armv8-a+crypto+crc" ;;
+                armhf) export UNRAR_CXXFLAGS="-march=armv7-a" ;;
+            esac
+            ;;
+        android)
+            setup_android
+            ;;
+        freebsd)
+            setup_freebsd
+            ;;
+        *)
+            echo "Unknown platform: $PLATFORM" >&2
+            exit 1
+            ;;
+    esac
+
+    require_compiler "$CC"
+    require_compiler "$CXX"
 }
 
 build_unrar()
 {
-    echo "Building unrar version $UNRAR_VERSION (source version $UNRAR_SRC_VERSION) for $ARCH (using $CORES cores)"
-    UNRARSRC=https://www.rarlab.com/rar/unrarsrc-$UNRAR_SRC_VERSION.tar.gz
-    curl -sS -o $BUILD_DIR/unrar.tar.gz $UNRARSRC
-    cd $BUILD_DIR
+    echo "Building unrar version $UNRAR_VERSION (source version $UNRAR_SRC_VERSION) for $PLATFORM/$ARCH -> unrar-$ARCH.tar.gz (using $CORES cores)"
+    curl -fsSL -o "$BUILD_DIR/unrar.tar.gz" "https://www.rarlab.com/rar/unrarsrc-$UNRAR_SRC_VERSION.tar.gz"
+    cd "$BUILD_DIR"
     tar zxf unrar.tar.gz
     rm unrar.tar.gz
     cd unrar
     sed "s|^CXX=.*|CXX=$CXX|" -i makefile
     sed "s|^AR=.*|AR=$AR|" -i makefile
     sed "s|^STRIP=.*|STRIP=$STRIP|" -i makefile
+    sed "s|^LDFLAGS=.*|LDFLAGS=$UNRAR_LDFLAGS|" -i makefile
+    if [ -n "${UNRAR_CXXFLAGS:-}" ]; then
+        sed "s|^CXXFLAGS=.*|& $UNRAR_CXXFLAGS|" -i makefile
+    fi
+    if [ -n "${UNRAR_LIBS:-}" ]; then
+        printf 'LIBS=%s\n' "$UNRAR_LIBS" >> makefile
+    fi
     # android specific fixes
     if [ "$PLATFORM" == "android" ] ; then
         sed 's:#ifdef __VMS$:#if defined (__VMS) || defined (__ANDROID__):' -i consio.cpp
         sed 's:^#define USE_LUTIMES$:#undef USE_LUTIMES:' -i os.hpp
-        # PIE + static libc++, dynamic Bionic (same model as nzbget). -static makes ARM64 TLS align 8.
-        sed "s|^LDFLAGS=.*|LDFLAGS=-pie -static-libstdc++|" -i makefile
-    fi
-    # freebsd specific fixes
-    if [ "$PLATFORM" == "freebsd" ]; then
-        sed "s|^CXXFLAGS=.*|CXXFLAGS=-std=c++11 -O2 -nostdlib --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i makefile
-        sed "s|^LDFLAGS=.*|LDFLAGS=-static --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -pthread -lc++ -lm -fuse-ld=lld|" -i makefile
-        sed "s|^STRIP=.*|STRIP=llvm-strip-$FREEBSD_CLANG_VER|" -i makefile
-    fi
-    # unrar7 optimizations
-    sed "s|LDFLAGS=-pthread|LDFLAGS=-pthread -static|" -i makefile
-    case $ARCH in
-        x86_64)
-            sed "s|CXXFLAGS=-march=native|CXXFLAGS=-march=x86-64|" -i makefile
-            ;;
-        aarch64)
-            sed "s|CXXFLAGS=-march=native|CXXFLAGS=-march=armv8-a+crypto+crc|" -i makefile
-            ;;
-        armhf)
-            sed "s|CXXFLAGS=-march=native|CXXFLAGS=-march=armv7-a|" -i makefile
-            ;;
-        *)
-            sed "s|CXXFLAGS=-march=native |CXXFLAGS=|" -i makefile
-            ;;
-    esac
-    if [ "$PLATFORM" == "android" ]; then
-        sed "s|^CXXFLAGS=|CXXFLAGS=-fPIE |" -i makefile
     fi
 
     # build
     make clean
-    make -j $CORES > $BUILD_DIR/build.log 2>&1
+    make -j "$CORES" > "$BUILD_DIR/build.log" 2>&1
     OUT_DIR=$BUILD_DIR/$ARCH
-    mkdir -p $OUT_DIR
-    cp unrar $OUT_DIR
-    cp license.txt $OUT_DIR/license-unrar.txt
-    rm -rf $BUILD_DIR/unrar
-    cd $BUILD_DIR
-    tar zcf "unrar-$ARCH.tar.gz" -C $OUT_DIR .
-    rm -rf $OUT_DIR
-    rm $BUILD_DIR/build.log
+    mkdir -p "$OUT_DIR"
+    cp unrar "$OUT_DIR"
+    cp license.txt "$OUT_DIR/license-unrar.txt"
+    rm -rf "$BUILD_DIR/unrar"
+    cd "$BUILD_DIR"
+    tar zcf "unrar-$ARCH.tar.gz" -C "$OUT_DIR" .
+    rm -rf "$OUT_DIR"
+    rm "$BUILD_DIR/build.log"
 }
 
 build_7zip()
 {
-    echo "Building 7zip version $ZIP7_VERSION for $ARCH (using $CORES cores)"
-    curl -sS -o $BUILD_DIR/7z.tar.xz -lL "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-src.tar.xz"
-    cd $BUILD_DIR
+    echo "Building 7zip version $ZIP7_VERSION for $PLATFORM/$ARCH -> 7zip-$ARCH.tar.gz (using $CORES cores)"
+    curl -fsSL -o "$BUILD_DIR/7z.tar.xz" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-src.tar.xz"
+    cd "$BUILD_DIR"
     mkdir -p 7z
     tar xf 7z.tar.xz -C 7z
     rm 7z.tar.xz
     cd 7z/CPP/7zip
-    sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -static|" -i 7zip_gcc.mak
+    if [ -n "${ZIP_ARCH_FLAGS:-}" ]; then
+        sed "s|^MY_ARCH_2 = .*|MY_ARCH_2 = \$(MY_ARCH) $ZIP_ARCH_FLAGS|" -i 7zip_gcc.mak
+    fi
+    if [ -n "${ZIP_LDFLAGS:-}" ]; then
+        sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = $ZIP_LDFLAGS|" -i 7zip_gcc.mak
+    fi
+    if [ -n "${ZIP_LIBS:-}" ]; then
+        sed "s|^LIB2 =.*|LIB2 = $ZIP_LIBS|" -i 7zip_gcc.mak
+    fi
     if [ "$PLATFORM" == "android" ]; then
         sed "s|^#if defined(TIME_UTC)|#if defined(_TIME_UTC)|g" -i ../Windows/TimeUtils.cpp
-        sed "s|^LIB2 =.*|LIB2 = |g" -i 7zip_gcc.mak
-        sed "s|^CFLAGS_WARN_WALL =.*|CFLAGS_WARN_WALL = -Wall -Wextra -fPIE|" -i 7zip_gcc.mak
-        sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -pie -static-libstdc++|" -i 7zip_gcc.mak
-    fi
-    if [ "$PLATFORM" == "freebsd" ]; then
-        sed "s|^MY_ARCH_2 = .*|MY_ARCH_2 = \$(MY_ARCH) --target=$FREEBSD_TARGET --sysroot=$FREEBSD_SYSROOT -I$FREEBSD_SYSROOT/usr/include/c++/v1|" -i 7zip_gcc.mak
-        sed "s|^LDFLAGS_STATIC =.*|LDFLAGS_STATIC = -static -fuse-ld=lld|" -i 7zip_gcc.mak
     fi
     cd Bundles/Alone
-    make -j $COREX -f makefile.gcc > $BUILD_DIR/build.log 2>&1
+    make -j "$CORES" -f makefile.gcc > "$BUILD_DIR/build.log" 2>&1
     OUT_DIR=$BUILD_DIR/$ARCH
-    mkdir -p $OUT_DIR
-    cp _o/7za $OUT_DIR/7za
-    cp ../../../../DOC/License.txt $OUT_DIR/license-7zip.txt
-    chmod -x $OUT_DIR/license-7zip.txt
-    rm -rf $BUILD_DIR/7z
-    cd $BUILD_DIR
-    tar zcf "7zip-$ARCH.tar.gz" -C $OUT_DIR .
-    rm -rf $OUT_DIR
-    rm $BUILD_DIR/build.log
+    mkdir -p "$OUT_DIR"
+    cp _o/7za "$OUT_DIR/7za"
+    "$STRIP" "$OUT_DIR/7za"
+    cp ../../../../DOC/License.txt "$OUT_DIR/license-7zip.txt"
+    chmod -x "$OUT_DIR/license-7zip.txt"
+    rm -rf "$BUILD_DIR/7z"
+    cd "$BUILD_DIR"
+    tar zcf "7zip-$ARCH.tar.gz" -C "$OUT_DIR" .
+    rm -rf "$OUT_DIR"
+    rm "$BUILD_DIR/build.log"
 }
 
 download_unrar_windows()
 {
     echo -n "Downloading unrar windows binaries version $UNRAR_VERSION ... "
-    curl -sS -o $BUILD_DIR/winrar-x64.exe -lL "https://www.rarlab.com/rar/winrar-x64-${UNRAR_VERSION//./}.exe"
-    cd $BUILD_DIR
+    curl -fsSL -o "$BUILD_DIR/winrar-x64.exe" -L "https://www.rarlab.com/rar/winrar-x64-${UNRAR_VERSION//./}.exe"
+    cd "$BUILD_DIR"
     OUT_DIR=$BUILD_DIR/winrar-x64
-    mkdir -p $OUT_DIR
-    unrar x winrar-x64.exe $OUT_DIR > $BUILD_DIR/build.log 2>&1
-    mv $OUT_DIR/UnRAR.exe $BUILD_DIR/unrar.exe
-    zip -j unrar-windows-x64.zip $BUILD_DIR/unrar.exe >> $BUILD_DIR/build.log 2>&1
-    rm -rf $OUT_DIR
-    rm $BUILD_DIR/*.exe
-    rm $BUILD_DIR/build.log
+    mkdir -p "$OUT_DIR"
+    unrar x winrar-x64.exe "$OUT_DIR" > "$BUILD_DIR/build.log" 2>&1
+    mv "$OUT_DIR/UnRAR.exe" "$BUILD_DIR/unrar.exe"
+    zip -j unrar-windows-x64.zip "$BUILD_DIR/unrar.exe" >> "$BUILD_DIR/build.log" 2>&1
+    rm -rf "$OUT_DIR"
+    rm "$BUILD_DIR"/*.exe
+    rm "$BUILD_DIR/build.log"
     echo "done"
 }
 
 download_7zip_windows()
 {
     echo -n "Downloading 7zip windows binaries version $ZIP7_VERSION ... "
-    curl -sS -o $BUILD_DIR/7zip.7z -lL "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-extra.7z"
-    cd $BUILD_DIR
+    curl -fsSL -o "$BUILD_DIR/7zip.7z" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-extra.7z"
+    cd "$BUILD_DIR"
     OUT_DIR=$BUILD_DIR/7zip
-    7z x 7zip.7z -o$OUT_DIR > $BUILD_DIR/build.log 2>&1
+    7z x 7zip.7z -o"$OUT_DIR" > "$BUILD_DIR/build.log" 2>&1
     X86_DIR=$BUILD_DIR/x86
     X64_DIR=$BUILD_DIR/x64
-    mkdir -p $X86_DIR
-    mkdir -p $X64_DIR
-    mv $OUT_DIR/7za.exe $X86_DIR/7za.exe
-    mv $OUT_DIR/x64/7za.exe $X64_DIR/7za.exe
-    zip -j 7zip-windows-x86.zip $X86_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
-    zip -j 7zip-windows-x64.zip $X64_DIR/7za.exe >> $BUILD_DIR/build.log 2>&1
-    rm -rf $OUT_DIR $X86_DIR $X64_DIR
-    rm $BUILD_DIR/*.7z
-    rm $BUILD_DIR/build.log
+    mkdir -p "$X86_DIR"
+    mkdir -p "$X64_DIR"
+    mv "$OUT_DIR/7za.exe" "$X86_DIR/7za.exe"
+    mv "$OUT_DIR/x64/7za.exe" "$X64_DIR/7za.exe"
+    zip -j 7zip-windows-x86.zip "$X86_DIR/7za.exe" >> "$BUILD_DIR/build.log" 2>&1
+    zip -j 7zip-windows-x64.zip "$X64_DIR/7za.exe" >> "$BUILD_DIR/build.log" 2>&1
+    rm -rf "$OUT_DIR" "$X86_DIR" "$X64_DIR"
+    rm "$BUILD_DIR"/*.7z
+    rm "$BUILD_DIR/build.log"
     echo "done"
 }
 
 download_7zip_macos()
 {
     echo -n "Downloading 7zip macos binaries version $ZIP7_VERSION ... "
-    curl -sS -o $BUILD_DIR/7z.tar.xz -lL "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-mac.tar.xz"
-    cd $BUILD_DIR
+    curl -fsSL -o "$BUILD_DIR/7z.tar.xz" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-mac.tar.xz"
+    cd "$BUILD_DIR"
     OUT_DIR=$BUILD_DIR/7zip
-    mkdir -p $OUT_DIR
-    tar xf 7z.tar.xz -C $OUT_DIR
-    cp $OUT_DIR/7zz $BUILD_DIR/7za
-    tar zcf 7zip-macos-universal.tar.gz 7za > $BUILD_DIR/build.log 2>&1
-    rm -rf $OUT_DIR
-    rm $BUILD_DIR/*.tar.xz
-    rm $BUILD_DIR/build.log
-    rm $BUILD_DIR/7za
+    mkdir -p "$OUT_DIR"
+    tar xf 7z.tar.xz -C "$OUT_DIR"
+    cp "$OUT_DIR/7zz" "$BUILD_DIR/7za"
+    tar zcf 7zip-macos-universal.tar.gz 7za > "$BUILD_DIR/build.log" 2>&1
+    rm -rf "$OUT_DIR"
+    rm "$BUILD_DIR"/*.tar.xz
+    rm "$BUILD_DIR/build.log"
+    rm "$BUILD_DIR/7za"
     echo "done"
 }
 
 download_unrar_macos()
 {
     echo -n "Downloading unrar macos binaries version $UNRAR_VERSION ... "
-    curl -sS -o $BUILD_DIR/unrar-arm64.tar.gz -lL "https://www.rarlab.com/rar/rarmacos-arm-${UNRAR_VERSION//./}.tar.gz"
-    curl -sS -o $BUILD_DIR/unrar-x64.tar.gz -lL "https://www.rarlab.com/rar/rarmacos-x64-${UNRAR_VERSION//./}.tar.gz"
-    cd $BUILD_DIR
+    curl -fsSL -o "$BUILD_DIR/unrar-arm64.tar.gz" -L "https://www.rarlab.com/rar/rarmacos-arm-${UNRAR_VERSION//./}.tar.gz"
+    curl -fsSL -o "$BUILD_DIR/unrar-x64.tar.gz" -L "https://www.rarlab.com/rar/rarmacos-x64-${UNRAR_VERSION//./}.tar.gz"
+    cd "$BUILD_DIR"
     ARM64_DIR=$BUILD_DIR/arm64
-    X64_DIR=$BUILD_DIR/x64    
-    mkdir -p $ARM64_DIR
-    mkdir -p $X64_DIR
-    tar zxf unrar-arm64.tar.gz -C $ARM64_DIR
-    tar zxf unrar-x64.tar.gz -C $X64_DIR
-    cp $ARM64_DIR/rar/unrar $ARM64_DIR/unrar
-    cp $X64_DIR/rar/unrar $X64_DIR/unrar
-    llvm-lipo-18 -create -output $BUILD_DIR/unrar $ARM64_DIR/unrar $X64_DIR/unrar
-    tar -C $ARM64_DIR -zcf unrar-macos-arm64.tar.gz unrar
-    tar -C $X64_DIR -zcf unrar-macos-x64.tar.gz unrar
-    tar -C $BUILD_DIR -zcf unrar-macos-universal.tar.gz unrar
-    rm -rf $ARM64_DIR $X64_DIR $BUILD_DIR/unrar
-    rm $BUILD_DIR/unrar-arm64.tar.gz $BUILD_DIR/unrar-x64.tar.gz
+    X64_DIR=$BUILD_DIR/x64
+    mkdir -p "$ARM64_DIR"
+    mkdir -p "$X64_DIR"
+    tar zxf unrar-arm64.tar.gz -C "$ARM64_DIR"
+    tar zxf unrar-x64.tar.gz -C "$X64_DIR"
+    cp "$ARM64_DIR/rar/unrar" "$ARM64_DIR/unrar"
+    cp "$X64_DIR/rar/unrar" "$X64_DIR/unrar"
+    llvm-lipo-18 -create -output "$BUILD_DIR/unrar" "$ARM64_DIR/unrar" "$X64_DIR/unrar"
+    tar -C "$ARM64_DIR" -zcf unrar-macos-arm64.tar.gz unrar
+    tar -C "$X64_DIR" -zcf unrar-macos-x64.tar.gz unrar
+    tar -C "$BUILD_DIR" -zcf unrar-macos-universal.tar.gz unrar
+    rm -rf "$ARM64_DIR" "$X64_DIR" "$BUILD_DIR/unrar"
+    rm "$BUILD_DIR/unrar-arm64.tar.gz" "$BUILD_DIR/unrar-x64.tar.gz"
     echo "done"
 }
 
@@ -314,8 +377,8 @@ build_unpackers()
 }
 
 # clean build directory
-rm -rf $BUILD_DIR
-mkdir -p $BUILD_DIR
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
 
 # build/download binaries
 for PLATFORM in $PLATFORMS; do
@@ -341,6 +404,10 @@ for PLATFORM in $PLATFORMS; do
             for UNPACKER in $UNPACKERS; do
                 "download_${UNPACKER}_macos"
             done
+            ;;
+        *)
+            echo "Unknown platform: $PLATFORM" >&2
+            exit 1
             ;;
     esac
 done

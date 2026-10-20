@@ -2,50 +2,97 @@
 
 Build and package static `unrar` and `7zip` (`7za`) binaries used by NZBGet across multiple platforms and architectures.
 
-The script either **cross-compiles from source** (Linux, Android, FreeBSD) or **downloads and repackages official prebuilt binaries** (Windows, macOS), then produces ready-to-ship archives in the `build/` directory.
+Linux, Android, and FreeBSD are cross-compiled in the [`nzbget-musl-builder`](https://github.com/nzbgetcom/nzbget-musl-builder) images. Windows and macOS are official prebuilt binaries, repackaged on the host.
 
-## Requirements
+Output archives are written to `./build/` (the directory is wiped and recreated on every run).
 
-- `bash`, `curl`, `tar`, `sed`, `make`
-- For Windows packaging: `unrar` and `zip` available on `PATH`
-- For macOS packaging: `7z` and `llvm-lipo-18` available on `PATH`
-- Cross-compilation toolchains available under `/build` (configurable via `BUILDROOT_HOME`):
-  - `/build/buildroot/<arch>` - buildroot musl toolchains for Linux targets
-  - `/build/android/<arch>` - Android NDK toolchains
-  - `/build/freebsd/sysroot-x86_64` and `/build/freebsd/sysroot-aarch64` - FreeBSD sysroots, plus `clang`/`clang++`/`lld` version `FREEBSD_CLANG_VER` on `PATH`
+## Images
 
-### Installing prerequisites on Ubuntu 24.04
+Images are published at `ghcr.io/nzbgetcom/nzbget-musl-builder`. The tag suffix is the image version (`1.0` today). Each image is `linux/amd64`.
 
-The following installs everything the script needs on Ubuntu 24.04 (`noble`), **excluding** the buildroot/Android NDK cross-toolchains (which are not apt packages and must be set up separately under `$BUILDROOT_HOME`):
+| Tag | What it contains |
+|---|---|
+| `linux-<arch>-1.0` | Musl GCC for one of `armel`, `armhf`, `aarch64`, `i686`, `x86_64`, `riscv64`, `ppc6xx` |
+| `android-1.0` | Android LLVM, Bionic sysroot, and static libc++ for `arm64`, `armv7`, `x86_64`, `x86` |
+| `freebsd-<arch>-1.0` | FreeBSD 13 sysroot for `x86_64` or `aarch64`, plus host Clang 19 |
+| `all-1.0` | Every toolchain above |
+
+Toolchains live at `/opt/nzbget/linux/<arch>`, `/opt/nzbget/android`, and `/opt/nzbget/freebsd`. A per-arch image only contains that one toolchain, so set `PLATFORMS` and the matching arch list. `:all-1.0` can build every cross target in one run.
+
+## Local builds with Docker
+
+`--platform linux/amd64` matters on an Arm host. `-u` keeps the files in `build/` owned by you.
+
+One Linux architecture, using the image that contains only that toolchain:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -u "$(id -u):$(id -g)" \
+  -e PLATFORMS=linux \
+  -e LINUX_ARCHS=x86_64 \
+  -v "$PWD":/src -w /src \
+  ghcr.io/nzbgetcom/nzbget-musl-builder:linux-x86_64-1.0 \
+  ./build.sh
+```
+
+Several Linux architectures, or any mix of Linux, Android, and FreeBSD, using the image that contains every toolchain:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -u "$(id -u):$(id -g)" \
+  -e PLATFORMS="linux android freebsd" \
+  -e LINUX_ARCHS="x86_64 aarch64" \
+  -e ANDROID_ARCHS="aarch64-ndk armhf-ndk" \
+  -e FREEBSD_ARCHS=x86_64-bsd \
+  -e UNPACKERS=unrar \
+  -v "$PWD":/src -w /src \
+  ghcr.io/nzbgetcom/nzbget-musl-builder:all-1.0 \
+  ./build.sh
+```
+
+Android only. This image already has all four architectures:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -u "$(id -u):$(id -g)" \
+  -e PLATFORMS=android \
+  -v "$PWD":/src -w /src \
+  ghcr.io/nzbgetcom/nzbget-musl-builder:android-1.0 \
+  ./build.sh
+```
+
+One FreeBSD architecture:
+
+```bash
+docker run --rm --platform linux/amd64 \
+  -u "$(id -u):$(id -g)" \
+  -e PLATFORMS=freebsd \
+  -e FREEBSD_ARCHS=aarch64-bsd \
+  -v "$PWD":/src -w /src \
+  ghcr.io/nzbgetcom/nzbget-musl-builder:freebsd-aarch64-1.0 \
+  ./build.sh
+```
+
+Windows and macOS do not use these images. They need `unrar`, `zip`, `7z`, and `llvm-lipo-18` on the host:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y \
-    build-essential \
-    curl \
-    tar \
-    sed \
-    zip \
-    unrar \
-    p7zip-full \
-    xz-utils \
-    clang-18 \
-    lld-18 \
-    llvm-18
+  curl tar zip unrar p7zip-full xz-utils llvm-18
+
+PLATFORMS="windows macos" ./build.sh
 ```
 
-## Usage
+The same script runs directly on the host when the toolchains are installed at the image paths (`/opt/nzbget/...`). Override those paths with `NZBGET_LINUX_TOOLCHAIN_DIR`, `NZBGET_ANDROID_TOOLCHAIN_DIR`, and `FREEBSD_PREFIX`.
 
-```bash
-./build.sh
-```
+## Archive names
 
-All configuration is done via environment variables (see below). For example, to build only 7-Zip for Linux x86_64 and arm64:
-
-```bash
-PLATFORMS=linux LINUX_ARCHS="x86_64 aarch64" UNPACKERS=7zip ./build.sh
-```
-
-Output archives are written to `./build/` (the directory is wiped and recreated on every run).
+| Platform | Build target | Archive |
+|---|---|---|
+| Linux | `x86_64`, `aarch64`, `armhf`, `armel`, `i686`, `ppc6xx`, `riscv64` | `unrar-<arch>.tar.gz`, `7zip-<arch>.tar.gz` |
+| Android | `i686-ndk`, `x86_64-ndk`, `armhf-ndk`, `aarch64-ndk` | `unrar-<arch>.tar.gz`, `7zip-<arch>.tar.gz` |
+| FreeBSD | `x86_64-bsd`, `aarch64-bsd` | `unrar-<arch>.tar.gz`, `7zip-<arch>.tar.gz` |
+| Windows | | `unrar-windows-x64.zip`, `7zip-windows-x86.zip`, `7zip-windows-x64.zip` |
+| macOS | | `unrar-macos-arm64.tar.gz`, `unrar-macos-x64.tar.gz`, `unrar-macos-universal.tar.gz`, `7zip-macos-universal.tar.gz` |
 
 ## Configuration (environment variables)
 
@@ -53,37 +100,38 @@ Output archives are written to `./build/` (the directory is wiped and recreated 
 |---|---|---|
 | `UNRAR_VERSION` | `7.23` | Version string used for downloaded RARLAB unrar/WinRAR binaries (Windows/macOS). |
 | `UNRAR_SRC_VERSION` | `7.2.7` | Version of the `unrarsrc` tarball to build from source (Linux/Android/FreeBSD). |
-| `ZIP7_VERSION` | `26.02` | Version of 7-Zip to build from source or download prebuilt (used for both source and binary URLs). |
-| `PLATFORMS` | `linux android freebsd windows macos` | Space-separated list of platforms to process.
+| `ZIP7_VERSION` | `26.03` | Version of 7-Zip to build from source or download prebuilt. |
+| `PLATFORMS` | `linux android freebsd windows macos` | Space-separated list of platforms to process. |
 | `UNPACKERS` | `unrar 7zip` | Space-separated list of unpackers to build/download. Valid values: `unrar`, `7zip`. |
-| `LINUX_ARCHS` | `armel armhf aarch64 i686 x86_64 riscv64 ppc6xx` | Architectures to build for the `linux` platform. |
-| `ANDROID_ARCHS` | `i686-ndk x86_64-ndk armhf-ndk aarch64-ndk` | Architectures to build for the `android` platform. |
-| `FREEBSD_ARCHS` | `x86_64-bsd aarch64-bsd` | Architectures to build for the `freebsd` platform. |
-| `BUILDROOT_HOME` | `/build` | Root path containing the `buildroot` and `android` cross-toolchains. |
+| `LINUX_ARCHS` | `armel armhf aarch64 i686 x86_64 riscv64 ppc6xx` | Linux architectures. Each one needs that arch in the image. |
+| `ANDROID_ARCHS` | `i686-ndk x86_64-ndk armhf-ndk aarch64-ndk` | Android architectures. |
+| `FREEBSD_ARCHS` | `x86_64-bsd aarch64-bsd` | FreeBSD architectures. |
+| `NZBGET_LINUX_TOOLCHAIN_DIR` | `/opt/nzbget/linux` | Linux musl toolchain root. |
+| `NZBGET_ANDROID_TOOLCHAIN_DIR` | `/opt/nzbget/android` | Android LLVM / sysroot / libc++ root. |
+| `FREEBSD_PREFIX` | `/opt/nzbget/freebsd` | FreeBSD sysroot root (`sysroot-<arch>`). |
 
 ## Reusable GitHub Actions workflow
 
-This repository exposes [`.github/workflows/build.yml`](.github/workflows/build.yml) as a **reusable workflow** (`workflow_call`), so other repositories can build/download the unpackers without duplicating the build/toolchain setup logic.
+[`.github/workflows/build.yml`](.github/workflows/build.yml) is a reusable workflow (`workflow_call`) and can also be started by hand (`workflow_dispatch`).
 
-It also runs standalone (`workflow_dispatch`) with the same inputs, so it can be triggered manually from the Actions tab of this repository.
+Linux, Android, and FreeBSD jobs run inside the matching musl-builder image. Windows and macOS jobs run on `ubuntu-24.04` and install the packaging tools there.
 
 ### Inputs
 
 | Input | Default | Description |
 |---|---|---|
-| `unpackers` | `"unrar 7zip"` | Space-separated list of unpackers to build/download. Valid values: `unrar`, `7zip`. |
-| `unrar-version` | `"7.23"` | Version string used for downloaded RARLAB unrar/WinRAR binaries (Windows/macOS). |
-| `unrar-src-version` | `"7.2.7"` | Version of the `unrarsrc` tarball to build from source (Linux/Android/FreeBSD). |
-| `zip7-version` | `"26.02"` | Version of 7-Zip to build from source or download prebuilt. |
-| `platforms` | `"linux android freebsd windows macos"` | Space-separated list of platforms to process. |
-| `linux-archs` | `"armel armhf aarch64 i686 x86_64 riscv64 ppc6xx"` | Architectures to build for the `linux` platform. |
-| `android-archs` | `"i686-ndk x86_64-ndk armhf-ndk aarch64-ndk"` | Architectures to build for the `android` platform. |
-| `freebsd-archs` | `"x86_64-bsd aarch64-bsd"` | Architectures to build for the `freebsd` platform. |
-| `release-tag` | `""` | If set, publishes a GitHub release with this tag containing all built/downloaded archives. Left empty (default), no release is created. |
+| `unpackers` | `"unrar 7zip"` | Space-separated list of unpackers. Valid values: `unrar`, `7zip`. |
+| `unrar-version` | `"7.23"` | RARLAB version for Windows/macOS binaries. |
+| `unrar-src-version` | `"7.2.7"` | `unrarsrc` version built from source. |
+| `zip7-version` | `"26.03"` | 7-Zip version. |
+| `platforms` | `"linux android freebsd windows macos"` | Platforms to process. |
+| `linux-archs` | `"armel armhf aarch64 i686 x86_64 riscv64 ppc6xx"` | Linux architectures. |
+| `android-archs` | `"i686-ndk x86_64-ndk armhf-ndk aarch64-ndk"` | Android architectures. |
+| `freebsd-archs` | `"x86_64-bsd aarch64-bsd"` | FreeBSD architectures. The image tag drops the `-bsd` suffix (`freebsd-x86_64-1.0`). |
+| `musl-builder-version` | `"1.0"` | Tag suffix of `ghcr.io/nzbgetcom/nzbget-musl-builder`. |
+| `release-tag` | `""` | When set, publishes a GitHub release with this tag. Empty skips the release. |
 
 ### Example: calling it from another repository
-
-The example below builds **only `unrar`**, for all platforms/architectures (left at their defaults), overriding just the version inputs, and publishes the result as release `v7.23`:
 
 ```yaml
 name: build unrar
@@ -101,5 +149,6 @@ jobs:
       unpackers: unrar
       unrar-version: "7.23"
       unrar-src-version: "7.2.7"
+      musl-builder-version: "1.0"
       release-tag: v7.23
 ```
