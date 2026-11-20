@@ -329,14 +329,18 @@ download_7zip_windows()
 download_7zip_macos()
 {
     echo -n "Downloading 7zip macos binaries version $ZIP7_VERSION ... "
-    curl -fsSL -o "$BUILD_DIR/7z.tar.xz" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-mac.tar.xz"
+    curl -fsSL -o "$BUILD_DIR/7z-arm64.tar.xz" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-mac.tar.xz"
+    curl -fsSL -o "$BUILD_DIR/7z-x64.tar.xz" -L "https://github.com/ip7z/7zip/releases/download/$ZIP7_VERSION/7z${ZIP7_VERSION//./}-mac-x64.tar.xz"
     cd "$BUILD_DIR"
-    OUT_DIR=$BUILD_DIR/7zip
-    mkdir -p "$OUT_DIR"
-    tar xf 7z.tar.xz -C "$OUT_DIR"
-    cp "$OUT_DIR/7zz" "$BUILD_DIR/7za"
+    ARM64_DIR=$BUILD_DIR/arm64
+    X64_DIR=$BUILD_DIR/x64
+    mkdir -p "$ARM64_DIR"
+    mkdir -p "$X64_DIR"
+    tar xf 7z-arm64.tar.xz -C "$ARM64_DIR"
+    tar xf 7z-x64.tar.xz -C "$X64_DIR"
+    llvm-lipo-18 -create -output "$BUILD_DIR/7za" "$ARM64_DIR/7zz" "$X64_DIR/7zz"
     tar zcf 7zip-macos-universal.tar.gz 7za > "$BUILD_DIR/build.log" 2>&1
-    rm -rf "$OUT_DIR"
+    rm -rf "$ARM64_DIR" "$X64_DIR"
     rm "$BUILD_DIR"/*.tar.xz
     rm "$BUILD_DIR/build.log"
     rm "$BUILD_DIR/7za"
